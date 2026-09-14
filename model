@@ -1,0 +1,153 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import random
+
+# ==========================================
+# 1. MAIN MODEL (Đại diện cho Neocortex)
+# ==========================================
+class SimpleNet(nn.Module):
+    def __init__(self, input_dim=20, hidden_dim=64, num_classes=2):
+        super(SimpleNet, self).__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_dim, num_classes)
+        
+    def forward(self, x):
+        return self.fc2(self.relu(self.fc1(x)))
+
+
+# ==========================================
+# 2. REPLAY BUFFER (Đại diện cho Hippocampus)
+# ==========================================
+class ReplayBuffer:
+    def __init__(self, capacity=200):
+        self.capacity = capacity
+        self.buffer = []
+
+    def push(self, x, y):
+        for i in range(x.size(0)):
+            if len(self.buffer) >= self.capacity:
+                self.buffer.pop(random.randint(0, len(self.buffer) - 1))
+            self.buffer.append((x[i].detach(), y[i].detach()))
+
+    def sample(self, batch_size):
+        if len(self.buffer) == 0:
+            return None, None
+        batch = random.sample(self.buffer, min(batch_size, len(self.buffer)))
+        x_batch = torch.stack([item[0] for item in batch])
+        y_batch = torch.stack([item[1] for item in batch])
+        return x_batch, y_batch
+
+
+# ==========================================
+# 3. REGULARIZATION: EWC (Bảo vệ trọng số)
+# ==========================================
+class EWC:
+    def __init__(self, model: nn.Module, importance_weight=100.0):
+        self.model = model
+        self.importance_weight = importance_weight
+        self.opt_params = {}
+        self.fisher = {}
+
+    def register_task_memory(self, dataloader):
+        """Tính ma trận thông tin Fisher để xác định trọng số quan trọng của tác vụ vừa học"""
+        self.model.eval()
+        fisher = {n: torch.zeros_like(p) for n, p in self.model.named_parameters() if p.requires_grad}
+        
+        criterion = nn.CrossEntropyLoss()
+        for x, y in dataloader:
+            self.model.zero_grad()
+            output = self.model(x)
+            loss = criterion(output, y)
+            loss.backward()
+
+            for n, p in self.model.named_parameters():
+                if p.requires_grad and p.grad is not None:
+                    fisher[n] += (p.grad.data ** 2) / len(dataloader)
+
+        self.fisher = fisher
+        # Lưu lại trạng thái trọng số tối ưu hiện tại (theta*)
+        self.opt_params = {n: p.clone().detach() for n, p in self.model.named_parameters() if p.requires_grad}
+
+    def penalty(self):
+        """Hàm phạt Regularization dựa trên mức độ lệch khỏi trọng số cũ"""
+        if not self.fisher:
+            return torch.tensor(0.0)
+        
+        loss = 0
+        for n, p in self.model.named_parameters():
+            if n in self.fisher:
+                _loss = self.fisher[n] * (p - self.opt_params[n]) ** 2
+                loss += _loss.sum()
+        return self.importance_weight * loss
+
+
+# ==========================================
+# 4. QUÁ TRÌNH HUẤN LUYỆN HYBRID (HYBRID TRAINING)
+# ==========================================
+def train_hybrid(model, dataloader, optimizer, ewc, replay_buffer, epochs=5, replay_weight=1.0):
+    criterion = nn.CrossEntropyLoss()
+    
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        
+        for x_curr, y_curr in dataloader:
+            optimizer.zero_grad()
+            
+            # 1. Loss từ dữ liệu tác vụ hiện tại
+            out_curr = model(x_curr)
+            loss_task = criterion(out_curr, y_curr)
+            
+            # 2. Loss từ Replay (Lấy mẫu dữ liệu cũ từ Hippocampus)
+            loss_replay = 0.0
+            x_rep, y_rep = replay_buffer.sample(batch_size=x_curr.size(0))
+            if x_rep is not None:
+                out_rep = model(x_rep)
+                loss_replay = criterion(out_rep, y_rep)
+            
+            # 3. Loss từ Regularization (EWC bảo vệ trọng số Neocortex)
+            loss_ewc = ewc.penalty()
+            
+            # Tổng hợp Loss lai: Total = Loss_mới + Loss_replay + Loss_regularization
+            loss = loss_task + (replay_weight * loss_replay) + loss_ewc
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            
+        print(f"Epoch {epoch+1}/{epochs} | Total Loss: {total_loss/len(dataloader):.4f}")
+
+
+# ==========================================
+# 5. MÔ PHỎNG CHẠY THỰC TẾ
+# ==========================================
+if __name__ == "__main__":
+    # Tảo dữ liệu giả lập cho Task 1 và Task 2
+    x_task1 = torch.randn(200, 20)
+    y_task1 = torch.randint(0, 2, (200,))
+    dl_task1 = DataLoader(TensorDataset(x_task1, y_task1), batch_size=32, shuffle=True)
+
+    x_task2 = torch.randn(200, 20)
+    y_task2 = torch.randint(0, 2, (200,))
+    dl_task2 = DataLoader(TensorDataset(x_task2, y_task2), batch_size=32, shuffle=True)
+
+    # Khởi tạo Hệ thống
+    model = SimpleNet(input_dim=20, hidden_dim=64, num_classes=2)
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    ewc = EWC(model, importance_weight=500.0)
+    replay_buffer = ReplayBuffer(capacity=100)
+
+    print("--- HỌC TÁC VỤ 1 (Task 1) ---")
+    train_hybrid(model, dl_task1, optimizer, ewc, replay_buffer, epochs=3)
+    
+    # Sau khi kết thúc Task 1:
+    # 1. Lưu một phần dữ liệu Task 1 vào Replay Buffer
+    replay_buffer.push(x_task1, y_task1)
+    # 2. Đăng ký thông tin Fisher cho EWC
+    ewc.register_task_memory(dl_task1)
+
+    print("\n--- HỌC TÁC VỤ 2 (Task 2 - Áp dụng Hybrid Replay + Regularization) ---")
+    train_hybrid(model, dl_task2, optimizer, ewc, replay_buffer, epochs=3)
