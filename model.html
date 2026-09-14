@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mô Phỏng AI Tự Nhận Biết Độ Lệch Dữ Liệu (Self-Aware AI Drift)</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --accent-yellow: #eab308;
+            --accent-blue: #3b82f6;
+            --terminal-bg: #090d16;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+
+        .dashboard {
+            width: 100%;
+            max-width: 900px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 0.5rem;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            color: var(--accent-blue);
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            color: var(--text-sub);
+            font-size: 0.95rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid #334155;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .meter-container {
+            margin-bottom: 1.2rem;
+        }
+
+        .meter-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            margin-bottom: 0.4rem;
+            color: var(--text-sub);
+        }
+
+        .meter-bar-bg {
+            background-color: #334155;
+            height: 12px;
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .meter-bar-fill {
+            height: 100%;
+            width: 0%;
+            background-color: var(--accent-green);
+            transition: width 0.5s ease, background-color 0.5s ease;
+        }
+
+        .threshold-line {
+            position: absolute;
+            left: 75%;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background-color: var(--accent-red);
+            z-index: 2;
+        }
+
+        .badge {
+            padding: 0.25rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .badge-normal { background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }
+        .badge-alert { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+
+        .btn {
+            background-color: var(--accent-blue);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+        }
+
+        .btn:hover { background-color: #2563eb; }
+        .btn:disabled { background-color: #475569; cursor: not-allowed; }
+
+        .terminal {
+            background-color: var(--terminal-bg);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.85rem;
+            height: 280px;
+            overflow-y: auto;
+            border: 1px solid #1e293b;
+        }
+
+        .log-line { margin-bottom: 0.4rem; line-height: 1.4; }
+        .log-info { color: var(--text-sub); }
+        .log-ok { color: var(--accent-green); }
+        .log-warn { color: var(--accent-yellow); }
+        .log-alert { color: var(--accent-red); font-weight: bold; }
+        .log-action { color: #38bdf8; }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <header>
+        <h1>Hệ Thống AI Tự Nhận Biết Độ Lệch Dữ Liệu</h1>
+        <p>Mô phỏng cơ chế tự phát hiện "môi trường lạ" để kích hoạt Regularization & Replay</p>
+    </header>
+
+    <div class="grid">
+        <!-- Bảng điều khiển và Chỉ số -->
+        <div class="card">
+            <div class="card-title">
+                Trạng Thái Hệ Thống
+                <span id="statusBadge" class="badge badge-normal">BÌNH THƯỜNG</span>
+            </div>
+
+            <div class="meter-container">
+                <div class="meter-label">
+                    <span>Độ tự tin Batch hiện tại (Softmax)</span>
+                    <span id="currentConfText">0.0%</span>
+                </div>
+                <div class="meter-bar-bg">
+                    <div id="currentConfBar" class="meter-bar-fill"></div>
+                </div>
+            </div>
+
+            <div class="meter-container">
+                <div class="meter-label">
+                    <span>Trung bình 5 Batch gần nhất (Sliding Window)</span>
+                    <span id="windowAvgText">0.0%</span>
+                </div>
+                <div class="meter-bar-bg">
+                    <div class="threshold-line" title="Ngưỡng kích hoạt (75%)"></div>
+                    <div id="windowAvgBar" class="meter-bar-fill"></div>
+                </div>
+            </div>
+
+            <p style="font-size: 0.8rem; color: var(--text-sub); margin-bottom: 1rem;">
+                * Ngưỡng kích hoạt tự động (Threshold): <strong>75.0%</strong> (Đường màu đỏ)
+            </p>
+
+            <button id="nextBtn" class="btn" onclick="stepSimulation()">Chạy Batch Tiếp Theo</button>
+        </div>
+
+        <!-- Terminal Output -->
+        <div class="card">
+            <div class="card-title">Console Output (Real-time Log)</div>
+            <div id="terminal" class="terminal">
+                <div class="log-line log-info">[HỆ THỐNG] Đã khởi tạo SelfAwareContinousLearner.</div>
+                <div class="log-line log-info">[HỆ THỐNG] Nhấn "Chạy Batch Tiếp Theo" để bắt đầu luồng dữ liệu.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Luồng dữ liệu mô phỏng
+    const batches = [
+        { id: 1, name: "Trời nắng (Mẫu 1)", conf: 92.5, env: "Nắng" },
+        { id: 2, name: "Trời nắng (Mẫu 2)", conf: 89.0, env: "Nắng" },
+        { id: 3, name: "Trời nắng (Mẫu 3)", conf: 91.2, env: "Nắng" },
+        { id: 4, name: "Chạng vạng sương mù", conf: 55.4, env: "Sương mù" },
+        { id: 5, name: "Sương mù dày đặc", conf: 48.1, env: "Sương mù" },
+        { id: 6, name: "Sương mù kèm mưa", conf: 42.0, env: "Mưa lớn" }
+    ];
+
+    const THRESHOLD = 75.0;
+    const WINDOW_SIZE = 5;
+    let currentStep = 0;
+    let confidenceWindow = [];
+
+    function appendLog(text, type = 'info') {
+        const terminal = document.getElementById('terminal');
+        const line = document.createElement('div');
+        line.className = `log-line log-${type}`;
+        line.innerText = text;
+        terminal.appendChild(line);
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function updateUI(currentConf, windowAvg, isAlert) {
+        // Cập nhật giá trị số
+        document.getElementById('currentConfText').innerText = currentConf.toFixed(1) + '%';
+        document.getElementById('windowAvgText').innerText = windowAvg.toFixed(1) + '%';
+
+        // Cập nhật thanh bar
+        const currentBar = document.getElementById('currentConfBar');
+        const windowBar = document.getElementById('windowAvgBar');
+        
+        currentBar.style.width = currentConf + '%';
+        windowBar.style.width = windowAvg + '%';
+
+        // Đổi màu thanh bar & badge nếu vượt ngưỡng cảnh báo
+        const badge = document.getElementById('statusBadge');
+        if (isAlert) {
+            windowBar.style.backgroundColor = 'var(--accent-red)';
+            badge.className = 'badge badge-alert';
+            badge.innerText = 'CẢNH BÁO DETECTED';
+        } else {
+            windowBar.style.backgroundColor = windowAvg < 80 ? 'var(--accent-yellow)' : 'var(--accent-green)';
+            badge.className = 'badge badge-normal';
+            badge.innerText = 'BÌNH THƯỜNG';
+        }
+    }
+
+    function stepSimulation() {
+        if (currentStep >= batches.length) {
+            appendLog("==> ĐÃ HOÀN THÀNH LUỒNG DỮ LIỆU MÔ PHỎNG.", "info");
+            document.getElementById('nextBtn').disabled = true;
+            document.getElementById('nextBtn').innerText = "Đã hoàn thành";
+            return;
+        }
+
+        const b = batches[currentStep];
+        
+        // Cập nhật cửa sổ trượt
+        confidenceWindow.push(b.conf);
+        if (confidenceWindow.length > WINDOW_SIZE) {
+            confidenceWindow.shift();
+        }
+
+        // Tính trung bình cửa sổ
+        const windowAvg = confidenceWindow.reduce((a, b) => a + b, 0) / confidenceWindow.length;
+        
+        // Kiểm tra điều kiện
+        const isTriggered = (confidenceWindow.length === WINDOW_SIZE) && (windowAvg < THRESHOLD);
+
+        updateUI(b.conf, windowAvg, isTriggered);
+
+        // Ghi Log Console
+        appendLog(`[Batch ${b.id}] (${b.name}) - Độ tự tin: ${b.conf}% | TB Cửa sổ (${confidenceWindow.length}/${WINDOW_SIZE}): ${windowAvg.toFixed(1)}%`, isTriggered ? 'warn' : 'ok');
+
+        if (isTriggered) {
+            appendLog(`\n[CẢNH BÁO TỰ ĐỘNG] Độ tự tin sụt giảm còn ${windowAvg.toFixed(1)}% < ${THRESHOLD}%!`, 'alert');
+            appendLog(`==> Tự động kích hoạt Regularization & Latent Replay...`, 'alert');
+            appendLog(` [Step 1] Đã tính ma trận Fisher cho LoRA Adapter cũ.`, 'action');
+            appendLog(` [Step 2] Đóng băng trọng số cũ, triệt tiêu xung đột Gradient.`, 'action');
+            appendLog(` [Step 3] Nạp 128 Latent Vectors từ Codebook để Replay.`, 'action');
+            appendLog(` [Step 4] Khởi tạo LoRA Expert mới cho môi trường "${b.env}".`, 'action');
+            appendLog(`[HOÀN TẤT] Hệ thống tự động chuyển đổi ngữ cảnh an toàn.\n`, 'ok');
+            
+            // Clear cửa sổ sau khi trigger
+            confidenceWindow = [];
+        }
+
+        currentStep++;
+    }
+</script>
+
+</body>
+</html>
